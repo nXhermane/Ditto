@@ -12,7 +12,7 @@
 const SOURCE_EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'];
 
 /** Directories that contain generated, vendored, or third-party code. */
-const EXCLUDED_DIRECTORIES = [
+export const EXCLUDED_DIRECTORIES = [
   'node_modules',
   'dist',
   'build',
