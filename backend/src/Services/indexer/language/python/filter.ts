@@ -5,7 +5,7 @@
 
 const PYTHON_EXTENSIONS = ['.py', '.pyi'];
 
-const EXCLUDED_PYTHON_DIRECTORIES = [
+export const EXCLUDED_PYTHON_DIRECTORIES = [
   '__pycache__',
   '.pytest_cache',
   '.mypy_cache',
