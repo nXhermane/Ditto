@@ -160,8 +160,6 @@ class IntelligenceService {
       })),
       differences: cluster.differences,
       ...(cluster.divergence ? { divergence: cluster.divergence } : {}),
-      isSuppressed: Boolean(cluster.isSuppressed),
-      ...(cluster.suppressionReason ? { suppressionReason: cluster.suppressionReason } : {}),
     };
   }
 }
