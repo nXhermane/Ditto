@@ -1,19 +1,12 @@
 import ignore from 'ignore';
-import {
-  createSuppressionMatcher,
-  parsePairSuppressions,
-  resolveSuppressions,
-  type RawSuppressionRule,
-  type SuppressionMatcher,
-} from './suppression.js';
-import type { ExtractedFunction } from '../../Models/contracts.js';
+import { parsePairSuppressions, type RawSuppressionRule } from './suppression.js';
+import logger from '../../Config/logger.js';
 
 export interface IgnoreMatcher {
   /** True when repo-relative path matches one of the ignore patterns */
   isIgnored(repoRelativePath: string): boolean;
   /** Active parsed glob patterns */
   patterns: string[];
-  suppressions: SuppressionMatcher;
 }
 
 export interface ParsedDittoConfig {
@@ -38,31 +31,42 @@ export const parseDittoFile = (content?: string): ParsedDittoConfig => {
   let currentSection: 'files' | 'suppressions' = 'files';
 
   for (const rawLine of lines) {
-    const line = rawLine.trim();
-    if (!line) continue;
+    const trimmed = rawLine.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
 
-    // Section header detection
-    if (line.toLowerCase() === '[files]') {
-      currentSection = 'files';
-      continue;
-    }
-    if (line.toLowerCase() === '[suppressions]') {
-      currentSection = 'suppressions';
+    const commentIdx = trimmed.indexOf('#');
+    const lineWithoutComment = (commentIdx !== -1 ? trimmed.slice(0, commentIdx) : trimmed).trim();
+
+    if (lineWithoutComment.startsWith('[') && lineWithoutComment.endsWith(']')) {
+      const header = lineWithoutComment.toLowerCase();
+      if (header === '[files]') {
+        currentSection = 'files';
+        continue;
+      }
+      if (header === '[suppressions]') {
+        currentSection = 'suppressions';
+        continue;
+      }
+      logger.warn(`[DITTOIGNORE] Unknown section header '${lineWithoutComment}' ignored.`);
       continue;
     }
 
     if (currentSection === 'files') {
-      if (!line.startsWith('#')) {
-        fileLines.push(line);
-      }
+      fileLines.push(trimmed);
     } else {
       suppressionLines.push(rawLine);
     }
   }
 
+  const parsedSuppressions = parsePairSuppressions(suppressionLines.join('\n'));
+
+  for (const m of parsedSuppressions.malformed) {
+    logger.warn(`[DITTOIGNORE] Malformed suppression rule: "${m.rawLine}" — ${m.error}`);
+  }
+
   return {
     filePatterns: fileLines,
-    rawSuppressions: parsePairSuppressions(suppressionLines.join('\n')),
+    rawSuppressions: parsedSuppressions.rules,
   };
 };
 
@@ -76,22 +80,11 @@ export const parseIgnorePatterns = (content?: string): string[] => {
   return parseDittoFile(content).filePatterns;
 };
 
-/**
- * Creates the unified IgnoreMatcher with known functions for resolution
- */
-export const createIgnoreMatcher = (
-  patterns: string[],
-  rawSuppressions: RawSuppressionRule[] = [],
-  knownFunctions: ExtractedFunction[] = []
-): IgnoreMatcher => {
-  const resolution = resolveSuppressions(rawSuppressions, knownFunctions);
-  const suppressionMatcher = createSuppressionMatcher(resolution);
-
+export const createIgnoreMatcher = (patterns: string[]): IgnoreMatcher => {
   if (patterns.length === 0) {
     return {
       isIgnored: () => false,
       patterns: [],
-      suppressions: suppressionMatcher,
     };
   }
 
@@ -106,6 +99,5 @@ export const createIgnoreMatcher = (
       return ig.ignores(cleanPath);
     },
     patterns,
-    suppressions: suppressionMatcher,
   };
 };

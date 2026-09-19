@@ -23,8 +23,11 @@ export interface ICluster {
   /** JSON-encoded arg arrays, e.g. '["00919876543210"]'. */
   probeInputs: string[];
   divergence?: DivergenceTable;
+  /**
+   *  Note: suppression mutes duplicate alerts, never a proven divergence.
+   */
   isSuppressed?: boolean;
-  suppressionReason?: string
+  suppressionReason?: string;
   createdAt: Date;
   updatedAt: Date;
 }

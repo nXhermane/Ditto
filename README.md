@@ -222,6 +222,23 @@ vendor/**
 
 Ditto applies the same `.dittoignore` patterns when building the full index and when Ditto Guard analyzes functions changed by a pull request.
 
+You can also mark intentional duplicate functions in `.dittoignore` using function body hashes (`[suppressions]`):
+
+```gitignore
+[files]
+vendor/**
+dist/**
+
+[suppressions]
+# <hashA>:<hashB> # optional reason
+e434559c8e9a1b88:41cf18cc268b48dc # Intentional compatibility shim between client and worker
+```
+
+- Each hash must be at least **12 characters** (prefixes are resolved against active functions).
+- Hashes are commutative (`A:B` is identical to `B:A`).
+- Multi-member clusters (3+ functions) are suppressed when rules connect all members into a single connected component.
+- **Expiration:** A rule automatically expires as soon as either function body changes (preventing stale suppressions).
+
 ### 2. Configure the backend
 
 ```bash

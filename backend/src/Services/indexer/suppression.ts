@@ -60,19 +60,27 @@ export const buildPairKey = (hashA: string, hashB: string): string => {
   return a < b ? `${a}:${b}` : `${b}:${a}`;
 };
 
+export interface SuppressionDiagnostic {
+  rawLine: string;
+  error: string;
+}
 /**
  * Parses raw text content of suppressions (from .dittoignore [suppressions]).
+ * 
  * Syntax: <hashA>:<hashB> # optional reason
  * Or  : <hashA> <hasbB> # optional reason
  */
-export const parsePairSuppressions = (content?: string): RawSuppressionRule[] => {
-  if (!content) return [];
+export const parsePairSuppressions = (
+  content?: string
+): { rules: RawSuppressionRule[]; malformed: SuppressionDiagnostic[] } => {
+  if (!content) return { rules: [], malformed: [] };
 
   const rules: RawSuppressionRule[] = [];
+  const malformed: SuppressionDiagnostic[] = [];
   const lines = content.split(/\r?\n/);
 
-  for (const line of lines) {
-    const trimmed = line.trim();
+  for (const rawLine of lines) {
+    const trimmed = rawLine.trim();
     if (!trimmed || trimmed.startsWith('#')) continue;
 
     // Split line from inline comment
@@ -83,21 +91,35 @@ export const parsePairSuppressions = (content?: string): RawSuppressionRule[] =>
     // Support separator ':' or whitespace
     let parts: string[] = [];
     if (rulePart.includes(':')) {
-      parts = rulePart.split(':').map((s) => s.trim());
+      parts = rulePart
+        .split(':')
+        .map((s) => s.trim())
+        .filter(Boolean);
     } else {
-      parts = rulePart.split(/\s+/).map((s) => s.trim());
+      parts = rulePart
+        .split(/\s+/)
+        .map((s) => s.trim())
+        .filter(Boolean);
     }
 
-    if (parts.length >= 2) {
+    if (parts.length === 2) {
       rules.push({
         rawHashA: parts[0].toLowerCase(),
         rawHashB: parts[1].toLowerCase(),
         reason: reason || undefined,
       });
+    } else {
+      malformed.push({
+        rawLine,
+        error:
+          parts.length < 2
+            ? 'Line has fewer than 2 hash tokens'
+            : 'Line has more than 2 tokens without a leading "#" for comment',
+      });
     }
   }
 
-  return rules;
+  return { rules, malformed };
 };
 
 type ResolveOutcome =
@@ -230,13 +252,6 @@ export const createSuppressionMatcher = (
     keyMap.set(rule.canonicalKey, rule);
   }
 
-  // Log ambiguity diagnostics (Honesty Rail)
-  for (const amb of resolution.ambiguities) {
-    logger.warn(
-      `[SUPPRESSION AMBIGUITY] ${amb.message}. Suppression ignored to prevent false matches.`
-    );
-  }
-
   return {
     isPairSuppressed: (hashA: string, hashB: string): boolean => {
       const key = buildPairKey(hashA, hashB);
@@ -249,4 +264,92 @@ export const createSuppressionMatcher = (
     activeRules: resolution.activeRules,
     ambiguities: resolution.ambiguities,
   };
+};
+
+export interface ClusterSuppressionResult {
+  suppressed: boolean;
+  reasons: string[];
+}
+
+/**
+ * Evaluates whether a cluster of functions is suppressed.
+ * A cluster is suppressed iff active suppression rules connect all member
+ * hashes into a single connected component (Union-Find).
+ */
+export const evaluateClusterSuppression = (
+  memberHashes: string[],
+  matcher: SuppressionMatcher
+): ClusterSuppressionResult => {
+  const distinctHashes = Array.from(
+    new Set(memberHashes.map((h) => h.toLowerCase().trim()).filter(Boolean))
+  );
+
+  if (distinctHashes.length < 2) {
+    return { suppressed: false, reasons: [] };
+  }
+
+  const parent = new Map<string, string>();
+  for (const h of distinctHashes) {
+    parent.set(h, h);
+  }
+
+  const find = (i: string): string => {
+    const root = parent.get(i) ?? i;
+    if (root === i) return i;
+    const next = find(root);
+    parent.set(i, next);
+    return next;
+  };
+
+  const union = (i: string, j: string): boolean => {
+    const rootI = find(i);
+    const rootJ = find(j);
+    if (rootI !== rootJ) {
+      parent.set(rootI, rootJ);
+      return true;
+    }
+    return false;
+  };
+
+  const reasons = new Set<string>();
+  let components = distinctHashes.length;
+
+  for (let i = 0; i < distinctHashes.length; i++) {
+    for (let j = i + 1; j < distinctHashes.length; j++) {
+      const hashA = distinctHashes[i];
+      const hashB = distinctHashes[j];
+
+      if (matcher.isPairSuppressed(hashA, hashB)) {
+        const suppression = matcher.getSuppression(hashA, hashB);
+        if (suppression?.reason) {
+          reasons.add(suppression.reason);
+        }
+        if (union(hashA, hashB)) {
+          components -= 1;
+        }
+      }
+    }
+  }
+
+  // The cluster is suppressed iff all members form 1 connected component
+  return {
+    suppressed: components === 1,
+    reasons: Array.from(reasons),
+  };
+};
+
+export const logSuppressionDiagnostics = (resolution: SuppressionResolutionResult): void => {
+  for (const amb of resolution.ambiguities) {
+    logger.warn(`[SUPPRESSION AMBIGUITY] ${amb.message}`);
+  }
+  for (const inv of resolution.invalidRules) {
+    logger.warn(
+      `[SUPPRESSION INVALID] Rule '${inv.rule.rawHashA}:${inv.rule.rawHashB}' invalid: ${inv.error}`
+    );
+  }
+  for (const stale of resolution.staleRules) {
+    logger.warn(
+      `[SUPPRESSION STALE] Rule '${stale.rawHashA}:${stale.rawHashB}' matches no active function bodies.`
+    );
+  }
 };

@@ -358,7 +358,13 @@ export type PrFinding = {
   /** The EXECUTED divergence table when both sides pure; null otherwise. */
   divergence: DivergenceTable | null;
   proof: 'executed' | 'suspected' | 'none';
-  /** True when marked as an intentional duplicate via .dittoignore suppression */
+  /**
+   * True when marked as an intentional duplicate via .dittoignore suppression.
+   *
+   * CONTRACT RULE: A suppression mutes the duplicate/reinvention claim, NEVER a
+   * proven divergence. A finding can have `suppressed: true` with `proof: 'executed'`
+   * and diverged rows, and that must still surface to the user.
+   */
   suppressed?: boolean;
   suppressionReason?: string;
 };
