@@ -40,6 +40,7 @@ const statsSchema = new mongoose.Schema<RepoStats>(
     healthScore: { type: Number, default: 100 },
     functionsAnalyzed: { type: Number, default: 0 },
     functionsTotal: { type: Number, default: 0 },
+    suppressedClusters: { type: Number, default: 0 },
   },
   { _id: false }
 );

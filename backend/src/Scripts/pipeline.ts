@@ -104,6 +104,7 @@ const printReport = (report: PipelineReport, json = false): void => {
     files ...................... ${stats.files}
     modules .................... ${stats.modules}
     semantic duplicate clusters  ${stats.semanticDuplicateClusters}
+    suppressed (intentional) ... ${stats.suppressedClusters}
     behavioural conflicts ...... ${stats.behavioralConflicts}
     near-duplicates ............ ${stats.nearDuplicates}
     reusable utilities ......... ${stats.reusableUtilities}

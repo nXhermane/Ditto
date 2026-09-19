@@ -26,6 +26,8 @@ import {
 import type { HydratedDocument } from 'mongoose';
 import {
   createSuppressionMatcher,
+  evaluateClusterSuppression,
+  logSuppressionDiagnostics,
   resolveSuppressions,
   type SuppressionMatcher,
 } from './indexer/suppression.js';
@@ -114,10 +116,14 @@ interface PipelineServiceDeps {
 
 const unwrapCacheFile = (
   data: ExtractorCacheFile
-): { functions: ExtractedFunction[]; commit: string } =>
+): { functions: ExtractedFunction[]; commit: string; dittoIgnoreContent?: string } =>
   Array.isArray(data)
     ? { functions: data, commit: 'unknown' }
-    : { functions: data.functions, commit: data.commit ?? 'unknown' };
+    : {
+        functions: data.functions,
+        commit: data.commit ?? 'unknown',
+        dittoIgnoreContent: data.dittoIgnoreContent,
+      };
 
 const toClusterable = (doc: HydratedDocument<IFunction>): ClusterableFunction => ({
   id: doc._id.toString(),
@@ -163,7 +169,6 @@ class PipelineService {
       maxFunctions,
       candidateCap,
       onStage,
-      dittoIgnoreContent,
     } = options;
 
     // The live path supplies functions in memory; the local CLI reads the cache
@@ -171,7 +176,11 @@ class PipelineService {
     // truncation signal is honest.
     const extracted =
       options.functions !== undefined
-        ? { functions: options.functions, commit: options.commit ?? 'unknown' }
+        ? {
+            functions: options.functions,
+            commit: options.commit ?? 'unknown',
+            dittoIgnoreContent: options.dittoIgnoreContent,
+          }
         : await this.readExtractorCache(owner, name, cacheDir);
     const functionsTotal = options.functionsTotal ?? extracted.functions.length;
     let functions = extracted.functions;
@@ -292,9 +301,11 @@ class PipelineService {
 
     let suppressionMatcher: SuppressionMatcher | undefined;
 
+    const dittoIgnoreContent = options.dittoIgnoreContent ?? extracted.dittoIgnoreContent;
     if (dittoIgnoreContent) {
       const parsedDitto = parseDittoFile(dittoIgnoreContent);
       const resolution = resolveSuppressions(parsedDitto.rawSuppressions, saved);
+      logSuppressionDiagnostics(resolution);
       suppressionMatcher = createSuppressionMatcher(resolution);
     }
 
@@ -306,39 +317,16 @@ class PipelineService {
             .map((id) => byId.get(id))
             .filter((doc): doc is HydratedDocument<IFunction> => Boolean(doc));
 
-          // Identify the canonical implementation chosen by flagship model
-          const canonicalDoc = byId.get(cluster.canonicalId);
+          const memberHashes = memberDocs.map((doc) => doc.bodyHash);
 
           let isClusterSuppressed = false;
           let suppressionReason: string | undefined;
 
-          // Case A: 2-member cluster (the standard pairwise duplicate A <-> B)
-          if (memberDocs.length === 2) {
-            const suppression = suppressionMatcher?.getSuppression(
-              memberDocs[0].bodyHash,
-              memberDocs[1].bodyHash
-            );
-            if (suppression) {
-              isClusterSuppressed = true;
-              suppressionReason = suppressionReason;
-            }
-          } else if (canonicalDoc) {
-            // Case B: Multi-member cluster (>= 3 functions)
-            // A cluster is considered suppressed if every non-canonical member
-            // has been intentionally paired with the canonical implementation
-            const nonCannonicals = memberDocs.filter(
-              (member) => member._id.toString() !== canonicalDoc._id.toString()
-            );
-            const allSuppressed = nonCannonicals.every((member) =>
-              suppressionMatcher?.isPairSuppressed(canonicalDoc.bodyHash, member.bodyHash)
-            );
-            if (allSuppressed && nonCannonicals.length > 0) {
-              isClusterSuppressed = true;
-              suppressionReason = suppressionMatcher?.getSuppression(
-                canonicalDoc.bodyHash,
-                nonCannonicals[0].bodyHash
-              )?.reason;
-            }
+          if (suppressionMatcher && memberHashes.length >= 2) {
+            const evalResult = evaluateClusterSuppression(memberHashes, suppressionMatcher);
+            isClusterSuppressed = evalResult.suppressed;
+            suppressionReason =
+              evalResult.reasons.length > 0 ? evalResult.reasons.join('; ') : undefined;
           }
 
           const members = memberDocs.map((doc) => {
@@ -428,7 +416,7 @@ class PipelineService {
     owner: string,
     name: string,
     cacheDir: string
-  ): Promise<{ functions: ExtractedFunction[]; commit: string }> {
+  ): Promise<{ functions: ExtractedFunction[]; commit: string; dittoIgnoreContent?: string }> {
     const file = path.join(cacheDir, `${owner}-${name}.json`);
 
     let raw: string;

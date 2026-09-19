@@ -43,6 +43,7 @@ import type { HydratedDocument } from 'mongoose';
 import { createIgnoreMatcher, parseDittoFile, parseIgnorePatterns } from './indexer/ignore.js';
 import {
   createSuppressionMatcher,
+  logSuppressionDiagnostics,
   resolveSuppressions,
   type SuppressionMatcher,
 } from './indexer/suppression.js';
@@ -554,6 +555,7 @@ class PrService {
         ];
 
         const resolution = resolveSuppressions(parsed.rawSuppressions, knownUniverse);
+        logSuppressionDiagnostics(resolution);
         suppressionMatcher = createSuppressionMatcher(resolution);
       }
     }

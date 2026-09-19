@@ -159,14 +159,19 @@ export const computeRepoStats = (
   ).length;
 
   const clusteredIds = new Set<string>();
+  for (const cluster of confirmed) {
+    for (const id of cluster.functionIds) {
+      clusteredIds.add(id);
+    }
+  }
+
   let linesRemovable = 0;
   let callSitesUnifiable = 0;
   let suspectedReinvented = 0;
 
-  for (const cluster of confirmed) {
+  for (const cluster of activeConfirmed) {
     const canonical = byId.get(cluster.canonicalId);
     for (const id of cluster.functionIds) {
-      clusteredIds.add(id);
       if (id === cluster.canonicalId) continue;
 
       const member = byId.get(id);
