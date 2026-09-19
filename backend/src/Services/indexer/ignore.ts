@@ -1,20 +1,12 @@
 import ignore from 'ignore';
-import {
-  createSuppressionMatcher,
-  parsePairSuppressions,
-  resolveSuppressions,
-  type RawSuppressionRule,
-  type SuppressionMatcher,
-} from './suppression.js';
+import { parsePairSuppressions, type RawSuppressionRule } from './suppression.js';
 import logger from '../../Config/logger.js';
-import type { ExtractedFunction } from '../../Models/contracts.js';
 
 export interface IgnoreMatcher {
   /** True when repo-relative path matches one of the ignore patterns */
   isIgnored(repoRelativePath: string): boolean;
   /** Active parsed glob patterns */
   patterns: string[];
-  suppressions: SuppressionMatcher;
 }
 
 export interface ParsedDittoConfig {
@@ -88,22 +80,11 @@ export const parseIgnorePatterns = (content?: string): string[] => {
   return parseDittoFile(content).filePatterns;
 };
 
-/**
- * Creates the unified IgnoreMatcher with known functions for resolution
- */
-export const createIgnoreMatcher = (
-  patterns: string[],
-  rawSuppressions: RawSuppressionRule[] = [],
-  knownFunctions: ExtractedFunction[] = []
-): IgnoreMatcher => {
-  const resolution = resolveSuppressions(rawSuppressions, knownFunctions);
-  const suppressionMatcher = createSuppressionMatcher(resolution);
-
+export const createIgnoreMatcher = (patterns: string[]): IgnoreMatcher => {
   if (patterns.length === 0) {
     return {
       isIgnored: () => false,
       patterns: [],
-      suppressions: suppressionMatcher,
     };
   }
 
@@ -118,6 +99,5 @@ export const createIgnoreMatcher = (
       return ig.ignores(cleanPath);
     },
     patterns,
-    suppressions: suppressionMatcher,
   };
 };
