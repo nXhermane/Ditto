@@ -185,5 +185,8 @@ describe('computeRepoStats', () => {
     expect(stats.behavioralConflicts).toBe(0);
     expect(stats.healthScore).toBe(100);
     expect(stats.suppressedClusters).toBe(1);
+    expect(stats.linesRemovable).toBe(0);
+    expect(stats.callSitesUnifiable).toBe(0);
+    expect(stats.suspectedReinvented).toBe(0);
   });
 });

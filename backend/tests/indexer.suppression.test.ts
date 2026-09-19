@@ -4,6 +4,9 @@ import {
   resolveSuppressions,
   createSuppressionMatcher,
   MIN_HASH_PREFIX_LENGTH,
+  evaluateClusterSuppression,
+  type SuppressionMatcher,
+ type ResolvedSuppression,
 } from '../src/Services/indexer/suppression.js';
 import { parseDittoFile } from '../src/Services/indexer/ignore.js';
 import type { ExtractedFunction } from '../src/Models/contracts.js';
@@ -159,6 +162,78 @@ describe('Per-Pair Suppression Engine', () => {
       // Mutated body leads to a different hash
       const mutatedHashA = HASH_CLAMP_WORKER;
       expect(matcher.isPairSuppressed(mutatedHashA, HASH_SHORTEN_B)).toBe(false);
+    });
+  });
+
+  describe('evaluateClusterSuppression', () => {
+    const createMockMatcher = (pairs: Array<[string, string, string?]>): SuppressionMatcher => {
+      const keyMap = new Map<string, ResolvedSuppression>();
+      for (const [a, b, reason] of pairs) {
+        const key = buildPairKey(a, b);
+        keyMap.set(key, {
+          fullHashA: a,
+          fullHashB: b,
+          canonicalKey: key,
+          reason,
+        });
+      }
+      return {
+        isPairSuppressed: (a, b) => keyMap.has(buildPairKey(a, b)),
+        getSuppression: (a, b) => keyMap.get(buildPairKey(a, b)),
+        activeRules: Array.from(keyMap.values()),
+        ambiguities: [],
+      };
+    };
+
+    it('suppresses 2-member cluster with 1 rule and collects reason', () => {
+      const matcher = createMockMatcher([[HASH_TRUNCATE_A, HASH_SHORTEN_B, 'legacy shim']]);
+      const res = evaluateClusterSuppression([HASH_TRUNCATE_A, HASH_SHORTEN_B], matcher);
+      expect(res.suppressed).toBe(true);
+      expect(res.reasons).toEqual(['legacy shim']);
+    });
+  
+    it('suppresses 3-member cluster with chain rules A:B and B:C (path)', () => {
+      const matcher = createMockMatcher([
+        [HASH_TRUNCATE_A, HASH_SHORTEN_B, 'reason 1'],
+        [HASH_SHORTEN_B, HASH_CLAMP_WORKER, 'reason 2'],
+      ]);
+      const res = evaluateClusterSuppression([HASH_TRUNCATE_A, HASH_SHORTEN_B, HASH_CLAMP_WORKER], matcher);
+      expect(res.suppressed).toBe(true);
+      expect(res.reasons.sort()).toEqual(['reason 1', 'reason 2']);
+    });
+  
+    it('suppresses 3-member cluster with star topology A:B and A:C', () => {
+      const matcher = createMockMatcher([
+        [HASH_TRUNCATE_A, HASH_SHORTEN_B, 'shared reason'],
+        [HASH_TRUNCATE_A, HASH_CLAMP_WORKER, 'shared reason'],
+      ]);
+      const res = evaluateClusterSuppression([HASH_TRUNCATE_A, HASH_SHORTEN_B, HASH_CLAMP_WORKER], matcher);
+      expect(res.suppressed).toBe(true);
+      expect(res.reasons).toEqual(['shared reason']);
+    });
+  
+    it('does NOT suppress 3-member cluster with only 1 rule (incomplete connection)', () => {
+      const matcher = createMockMatcher([[HASH_TRUNCATE_A, HASH_SHORTEN_B, 'only AB']]);
+      const res = evaluateClusterSuppression([HASH_TRUNCATE_A, HASH_SHORTEN_B, HASH_CLAMP_WORKER], matcher);
+      expect(res.suppressed).toBe(false);
+    });
+  
+    it('does NOT suppress 4-member cluster with disjoint pairs A:B and C:D', () => {
+      const matcher = createMockMatcher([
+        [HASH_TRUNCATE_A, HASH_SHORTEN_B, 'pair 1'],
+        [HASH_CLAMP_WORKER, HASH_CLAMP_MAIN, 'pair 2'],
+      ]);
+      const res = evaluateClusterSuppression([HASH_TRUNCATE_A, HASH_SHORTEN_B, HASH_CLAMP_WORKER, HASH_CLAMP_MAIN], matcher);
+      expect(res.suppressed).toBe(false);
+    });
+  
+    it('does not allow external hash to act as a bridge', () => {
+      const matcher = createMockMatcher([
+        [HASH_TRUNCATE_A, HASH_NORMALIZE_PHONE],
+        [HASH_NORMALIZE_PHONE, HASH_SHORTEN_B],
+      ]);
+      const res = evaluateClusterSuppression([HASH_TRUNCATE_A, HASH_SHORTEN_B], matcher);
+      expect(res.suppressed).toBe(false);
     });
   });
 });
