@@ -368,3 +368,30 @@ export const logSuppressionDiagnostics = (resolution: SuppressionResolutionResul
     );
   }
 };
+
+/**
+ * Computes the shortest unambiguous prefix for a given hash against a set of candidate hashes.
+ * Ensures minimum length of MIN_HASH_PREFIX_LENGTH (12), expanding if collisions exist.
+ */
+export const computeShortestUnambiguousPrefix = (
+  targetHash: string,
+  allDistinctHashes: string[],
+  minLength: number = MIN_HASH_PREFIX_LENGTH
+): string => {
+  const normalizedTarget = targetHash.toLowerCase().trim();
+  const otherHashes = allDistinctHashes
+    .map((h) => h.toLowerCase().trim())
+    .filter((h) => h !== normalizedTarget);
+
+  let length = Math.max(minLength, 1);
+  while (length <= normalizedTarget.length) {
+    const candidatePrefix = normalizedTarget.slice(0, length);
+    const hasCollision = otherHashes.some((h) => h.startsWith(candidatePrefix));
+    if (!hasCollision) {
+      return candidatePrefix;
+    }
+    length += 1;
+  }
+
+  return normalizedTarget;
+};
