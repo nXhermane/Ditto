@@ -367,6 +367,11 @@ export type PrFinding = {
    */
   suppressed?: boolean;
   suppressionReason?: string;
+  /**
+   * Ready-to-paste suppression key (<prefixA>:<prefixB>) calculated using the
+   * shortest unambiguous prefix.
+   */
+  suppressionKey?: string;
 };
 
 /** A finished per-PR analysis — self-contained, keyed for dedup by headSha. */

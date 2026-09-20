@@ -83,7 +83,9 @@ fi
 analysis="$(api GET "/api/v1/pr/${pr_analysis_id}")" || soft_exit "Failed to fetch PR analysis ${pr_analysis_id}."
 findings="$(jq -c '.data.findings // []' <<<"$analysis")"
 changed="$(jq -r '.data.changedFunctions // 0' <<<"$analysis")"
-dupe_count="$(jq '[.[] | select(.verdict=="duplicate" or .verdict=="near-duplicate")] | length' <<<"$findings")"
+# Only count unsuppressed findings for failing the workflow or triggering an alert
+dupe_count="$(jq '[.[] | select((.verdict=="duplicate" or .verdict=="near-duplicate") and .suppressed != true)] | length' <<<"$findings")"
+total_dupe_count="$(jq '[.[] | select(.verdict=="duplicate" or .verdict=="near-duplicate")] | length' <<<"$findings")"
 proven_count="$(jq '[.[] | select(.proof=="executed")] | length' <<<"$findings")"
 
 # --- build the report ---
@@ -92,18 +94,29 @@ report="$(mktemp)"
   echo "$MARKER"
   echo "## 🔁 Ditto Guard"
   echo ""
-  if [[ "$dupe_count" -eq 0 ]]; then
+  if [[ "$total_dupe_count" -eq 0 ]]; then
     echo "✅ No reinvented logic found in this PR's changed functions."
   else
-    echo "Found **${dupe_count}** function(s) that reinvent existing behaviour (**${proven_count}** proven by execution):"
+    if [[ "$dupe_count" -gt 0 ]]; then
+      echo "Found **${dupe_count}** function(s) that reinvent existing behaviour (**${proven_count}** proven by execution):"
+    else
+      echo "Found **${total_dupe_count}** intentional duplicate(s) (all suppressed via \`.dittoignore\`):"
+    fi
     echo ""
     jq -r '
       .[] | select(.verdict=="duplicate" or .verdict=="near-duplicate") |
-      "- " +
-      (if .proof=="executed" then "🔴 **PROVEN divergence** — " else "🟡 suspected — " end) +
-      "`" + .newFunction.name + "` (`" + .newFunction.file + ":" + (.newFunction.startLine|tostring) + "`) " +
-      "reinvents `" + (.match.name // "?") + "` (`" + (.match.file // "?") + ":" + ((.match.startLine // 0)|tostring) + "`)" +
-      (if (.usedBy|length) > 0 then " — already used by " + ((.usedBy|length)|tostring) + " module(s)" else "" end)
+      (if .suppressed == true then
+        "- ⚪ suppressed: `" + .newFunction.name + "` (`" + .newFunction.file + ":" + (.newFunction.startLine|tostring) + "`) intentional duplicate of `" + (.match.name // "?") + "` (`" + (.match.file // "?") + ":" + ((.match.startLine // 0)|tostring) + "`)" + (if .suppressionReason then " — *" + .suppressionReason + "*" else "" end)
+      else
+        "- " +
+        (if .proof=="executed" then "🔴 **PROVEN divergence** — " else "🟡 suspected — " end) +
+        "`" + .newFunction.name + "` (`" + .newFunction.file + ":" + (.newFunction.startLine|tostring) + "`) " +
+        "reinvents `" + (.match.name // "?") + "` (`" + (.match.file // "?") + ":" + ((.match.startLine // 0)|tostring) + "`)" +
+        (if (.usedBy|length) > 0 then " — already used by " + ((.usedBy|length)|tostring) + " module(s)" else "" end) +
+        (if .suppressionKey then
+          "\n  <details>\n  <summary>Mark this duplicate as intentional</summary>\n\n  Add to `.dittoignore`:\n  ```ini\n  [suppressions]\n  " + .suppressionKey + " # Intentional duplicate: " + .newFunction.name + " (" + .newFunction.file + ") <-> " + (.match.name // "?") + " (" + (.match.file // "?") + ")\n  ```\n  </details>"
+        else "" end)
+      end)
     ' <<<"$findings"
   fi
   echo ""
@@ -122,7 +135,7 @@ if [[ "$COMMENT" == "true" ]]; then
     GH_TOKEN="${INPUT_GITHUB_TOKEN}" gh api --method PATCH "repos/${owner}/${name}/issues/comments/${comment_id}" \
       -F "body=@${report}" >/dev/null \
       || echo "::warning::Could not update PR comment — ensure the workflow grants 'pull-requests: write'."
-  elif [[ "$dupe_count" -gt 0 ]]; then
+  elif [[ "$total_dupe_count" -gt 0 ]]; then
     GH_TOKEN="${INPUT_GITHUB_TOKEN}" gh pr comment "$pr_number" --repo "${owner}/${name}" --body-file "$report" \
       || echo "::warning::Could not post PR comment — ensure the workflow grants 'pull-requests: write'."
   fi
