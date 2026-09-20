@@ -22,7 +22,7 @@ export interface ParsedDittoConfig {
  */
 export const parseDittoFile = (content?: string): ParsedDittoConfig => {
   if (!content) {
-    return { filePatterns: [], rawSuppressions: [] };
+    return { filePatterns: [], rawSuppressions: [], malformedSuppressions: [] };
   }
 
   const lines = content.split(/\r?\n/);
