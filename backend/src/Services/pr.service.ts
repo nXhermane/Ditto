@@ -557,7 +557,7 @@ class PrService {
         ];
 
         const resolution = resolveSuppressions(parsed.rawSuppressions, knownUniverse);
-        logSuppressionDiagnostics(resolution);
+        logSuppressionDiagnostics(resolution, parsed.malformedSuppressions);
         suppressionMatcher = createSuppressionMatcher(resolution);
       }
     }

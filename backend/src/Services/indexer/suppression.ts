@@ -353,7 +353,13 @@ export const evaluateClusterSuppression = (
   };
 };
 
-export const logSuppressionDiagnostics = (resolution: SuppressionResolutionResult): void => {
+export const logSuppressionDiagnostics = (
+  resolution: SuppressionResolutionResult,
+  malformed: Array<{ rawLine: string; error: string }> = []
+): void => {
+  for (const m of malformed) {
+    logger.warn(`[DITTOIGNORE] Malformed suppression rule: "${m.rawLine}" — ${m.error}`);
+  }
   for (const amb of resolution.ambiguities) {
     logger.warn(`[SUPPRESSION AMBIGUITY] ${amb.message}`);
   }
