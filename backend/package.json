@@ -17,7 +17,8 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "suppress": "tsx src/Scripts/suppress.ts"
   },
   "author": "Kartik Dwivedi",
   "license": "ISC",

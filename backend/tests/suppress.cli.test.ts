@@ -75,10 +75,18 @@ describe('Suppression CLI Helper (add & check)', () => {
     it('parses valid path:function targets', () => {
       const parsed = parseFunctionTarget('src/utils/date.ts:formatDate');
       expect(parsed.filePath).toBe('src/utils/date.ts');
-      expect(parsed.functionName).toBe('formatDate');
+      expect(parsed.selector).toBe('formatDate');
+      expect(parsed.isLineNumber).toBe(false);
     });
 
-    it('rejects targets without a function name or missing colon', () => {
+    it('parses valid path:line disambiguation targets', () => {
+      const parsed = parseFunctionTarget('src/utils/date.ts:42');
+      expect(parsed.filePath).toBe('src/utils/date.ts');
+      expect(parsed.selector).toBe('42');
+      expect(parsed.isLineNumber).toBe(true);
+    });
+
+    it('rejects targets without a function name/line or missing colon', () => {
       expect(() => parseFunctionTarget('src/utils/date.ts')).toThrow(/Invalid function target/);
       expect(() => parseFunctionTarget('src/utils/date.ts:')).toThrow(/Invalid function target/);
       expect(() => parseFunctionTarget(':formatDate')).toThrow(/Invalid function target/);
@@ -86,7 +94,7 @@ describe('Suppression CLI Helper (add & check)', () => {
   });
 
   describe('addSuppression', () => {
-    it('creates .dittoignore with [suppressions] and writes 16-char hashes', async () => {
+    it('creates .dittoignore with [suppressions] and writes shortest unambiguous hashes', async () => {
       const fileA = path.join(tmpDir, 'fileA.ts');
       const fileB = path.join(tmpDir, 'fileB.ts');
 
@@ -113,10 +121,80 @@ describe('Suppression CLI Helper (add & check)', () => {
 
       expect(res.ruleLine).toContain(':');
       expect(res.ruleLine).toContain('# intentional shim for worker');
+      expect(res.key).toBeDefined();
+      expect(res.key.split(':')[0].length).toBeGreaterThanOrEqual(12);
 
       const content = await fs.readFile(res.dittoIgnorePath, 'utf-8');
       expect(content).toContain('[suppressions]');
       expect(content).toContain(res.ruleLine);
+    });
+
+    it('uses file:line as disambiguator when function names collide in a file', async () => {
+      const fileA = path.join(tmpDir, 'service.ts');
+      const fileB = path.join(tmpDir, 'other.ts');
+
+      await fs.writeFile(
+        fileA,
+        `export function format(val: string) {
+          const trimmed = val.trim();
+          return trimmed.toLowerCase();
+        }
+
+        export const helper = {
+          format(val: number) {
+            const num = Math.round(val);
+            return String(num);
+          }
+        };`
+      );
+
+      await fs.writeFile(
+        fileB,
+        `export function clean(val: string) {
+          const trimmed = val.trim();
+          return trimmed.toLowerCase();
+        }`
+      );
+
+      await expect(
+        addSuppression('service.ts:format', 'other.ts:clean', {
+          targetDir: tmpDir,
+        })
+      ).rejects.toThrow(/Ambiguous function name 'format' in service.ts \(2 candidates found\)/);
+
+      const res = await addSuppression('service.ts:1', 'other.ts:clean', {
+        targetDir: tmpDir,
+      });
+
+      expect(res.ruleLine).toContain(':');
+      const content = await fs.readFile(res.dittoIgnorePath, 'utf-8');
+      expect(content).toContain(res.ruleLine);
+    });
+
+    it('defaults reason to include both file paths when not specified', async () => {
+      const fileA = path.join(tmpDir, 'a.ts');
+      const fileB = path.join(tmpDir, 'b.ts');
+
+      await fs.writeFile(
+        fileA,
+        `export function fnA(s: string) {
+          const a = s.trim();
+          return a;
+        }`
+      );
+      await fs.writeFile(
+        fileB,
+        `export function fnB(s: string) {
+          const b = s.trim();
+          return b;
+        }`
+      );
+
+      const res = await addSuppression('a.ts:fnA', 'b.ts:fnB', {
+        targetDir: tmpDir,
+      });
+
+      expect(res.ruleLine).toContain('# Intentional duplicate: fnA (a.ts) <-> fnB (b.ts)');
     });
 
     it('supports polyglot files including Python via registered adapters', async () => {

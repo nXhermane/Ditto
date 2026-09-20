@@ -8,7 +8,11 @@ import {
   adapterFor,
 } from '../Services/indexer/language/registry.js';
 import { parseDittoFile, createIgnoreMatcher } from '../Services/indexer/ignore.js';
-import { resolveSuppressions, MIN_HASH_PREFIX_LENGTH } from '../Services/indexer/suppression.js';
+import {
+  resolveSuppressions,
+  MIN_HASH_PREFIX_LENGTH,
+  computeShortestUnambiguousPrefix,
+} from '../Services/indexer/suppression.js';
 import type { ExtractedFunction } from '../Models/contracts.js';
 import type { SuppressionResolutionResult } from '../Services/indexer/suppression.js';
 
@@ -97,7 +101,8 @@ export const parseArgs = (argv: string[]): CliArgs => {
 
 export interface FunctionTarget {
   filePath: string;
-  functionName: string;
+  selector: string; // functionName or line number
+  isLineNumber: boolean;
 }
 
 export interface AddSuppressionOptions {
@@ -118,28 +123,35 @@ const plural = (count: number, singular: string, pluralForm: string = `${singula
   `${count} ${count === 1 ? singular : pluralForm}`;
 
 /**
- * Parses target strings like "src/utils/date.ts:formatDate"
+ * Parses target strings like "src/utils/date.ts:formatDate" or "src/utils/date.ts:25"
  */
 export const parseFunctionTarget = (targetStr: string): FunctionTarget => {
   const lastColon = targetStr.lastIndexOf(':');
   if (lastColon <= 0 || lastColon === targetStr.length - 1) {
     throw new Error(
-      `Invalid function target '${targetStr}'. Expected format: path/to/file.ext:functionName`
+      `Invalid function target '${targetStr}'. Expected format: path/to/file.ext:functionName or path/to/file.ext:line`
     );
   }
+
+  const filePath = targetStr.slice(0, lastColon);
+  const selector = targetStr.slice(lastColon + 1);
+  const isLineNumber = /^\d+$/.test(selector);
+
   return {
-    filePath: targetStr.slice(0, lastColon),
-    functionName: targetStr.slice(lastColon + 1),
+    filePath,
+    selector,
+    isLineNumber,
   };
 };
 
 /**
- * Finds a specific function in a file and returns its bodyHash
+ * Finds a specific function in a file and returns its extracted metadata.
+ * Fails loud if multiple functions match a name, requiring file:line disambiguation.
  */
-export const resolveFunctionHash = async (
+export const resolveFunctionInFile = async (
   target: FunctionTarget,
   baseDir: string
-): Promise<{ bodyHash: string; name: string; file: string }> => {
+): Promise<ExtractedFunction> => {
   const adapter = adapterFor(target.filePath);
   if (!adapter) {
     throw new Error(
@@ -156,27 +168,42 @@ export const resolveFunctionHash = async (
   }
 
   const { functions } = adapter.extract(target.filePath, content);
-  const matched = functions.filter((fn) => fn.name === target.functionName);
+
+  if (target.isLineNumber) {
+    const targetLine = parseInt(target.selector, 10);
+    const match = functions.find((fn) => targetLine >= fn.startLine && targetLine <= fn.endLine);
+    if (!match) {
+      throw new Error(
+        `No function spans line ${targetLine} in ${target.filePath}. Functions in file: ${
+          functions.map((f) => `${f.name} (L${f.startLine}-${f.endLine})`).join(', ') || 'none'
+        }`
+      );
+    }
+    return match;
+  }
+
+  // Otherwise matching by function name
+  const matched = functions.filter((fn) => fn.name === target.selector);
 
   if (matched.length === 0) {
     throw new Error(
-      `Function '${target.functionName}' was not found in ${target.filePath}. Available functions: ${
-        functions.map((f) => f.name).join(', ') || 'none'
+      `Function '${target.selector}' was not found in ${target.filePath}. Available functions: ${
+        functions.map((f) => `${f.name} (L${f.startLine})`).join(', ') || 'none'
       }`
     );
   }
 
   if (matched.length > 1) {
+    const candidates = matched
+      .map((f) => `  - ${f.name} at line ${f.startLine} (L${f.startLine}-${f.endLine})`)
+      .join('\n');
     throw new Error(
-      `Ambiguous function name '${target.functionName}' in ${target.filePath} (${matched.length} declarations found).`
+      `Ambiguous function name '${target.selector}' in ${target.filePath} (${matched.length} candidates found):\n${candidates}\n` +
+        `Please disambiguate by specifying the line number: ${target.filePath}:<line>`
     );
   }
 
-  return {
-    bodyHash: matched[0].bodyHash,
-    name: matched[0].name,
-    file: target.filePath,
-  };
+  return matched[0];
 };
 
 /**
@@ -186,22 +213,35 @@ export const addSuppression = async (
   targetAStr: string,
   targetBStr: string,
   options: AddSuppressionOptions = {}
-): Promise<{ ruleLine: string; dittoIgnorePath: string }> => {
+): Promise<{ ruleLine: string; dittoIgnorePath: string; key: string }> => {
   const baseDir = path.resolve(options.targetDir ?? process.cwd());
   const targetA = parseFunctionTarget(targetAStr);
   const targetB = parseFunctionTarget(targetBStr);
 
-  const fnA = await resolveFunctionHash(targetA, baseDir);
-  const fnB = await resolveFunctionHash(targetB, baseDir);
+  const fnA = await resolveFunctionInFile(targetA, baseDir);
+  const fnB = await resolveFunctionInFile(targetB, baseDir);
 
-  const hashA = fnA.bodyHash.slice(0, MIN_HASH_PREFIX_LENGTH);
-  const hashB = fnB.bodyHash.slice(0, MIN_HASH_PREFIX_LENGTH);
+  const universe = await extractRepoUniverse(baseDir);
+  const allDistinctHashes = Array.from(
+    new Set([...universe.map((f) => f.bodyHash), fnA.bodyHash, fnB.bodyHash].filter(Boolean))
+  );
+
+  const prefixA = computeShortestUnambiguousPrefix(
+    fnA.bodyHash,
+    allDistinctHashes,
+    MIN_HASH_PREFIX_LENGTH
+  );
+  const prefixB = computeShortestUnambiguousPrefix(
+    fnB.bodyHash,
+    allDistinctHashes,
+    MIN_HASH_PREFIX_LENGTH
+  );
 
   const commentReason = options.reason
     ? options.reason.trim()
-    : `Intentional duplicate: ${fnA.file}:${fnA.name} <-> ${fnB.file}:${fnB.name}`;
+    : `Intentional duplicate: ${fnA.name} (${fnA.file}) <-> ${fnB.name} (${fnB.file})`;
 
-  const ruleLine = `${hashA}:${hashB} # ${commentReason}`;
+  const ruleLine = `${prefixA}:${prefixB} # ${commentReason}`;
   const dittoIgnorePath = path.join(baseDir, '.dittoignore');
 
   let existingContent = '';
@@ -229,7 +269,42 @@ export const addSuppression = async (
 
   await fs.writeFile(dittoIgnorePath, updatedContent, 'utf-8');
 
-  return { ruleLine, dittoIgnorePath };
+  return { ruleLine, dittoIgnorePath, key: `${prefixA}:${prefixB}` };
+};
+
+/**
+ * Scans the target repository respecting .dittoignore path patterns
+ * and extracts all functions across all registered languages.
+ */
+export const extractRepoUniverse = async (baseDir: string): Promise<ExtractedFunction[]> => {
+  const dittoIgnorePath = path.join(baseDir, '.dittoignore');
+  let filePatterns: string[] = [];
+
+  try {
+    const content = await fs.readFile(dittoIgnorePath, 'utf-8');
+    filePatterns = parseDittoFile(content).filePatterns;
+  } catch {
+    // No .dittoignore yet
+  }
+
+  const ignoreMatcher = createIgnoreMatcher(filePatterns);
+  const sourceFiles = await walkSourceFiles(baseDir, baseDir, (p) => ignoreMatcher.isIgnored(p));
+
+  const allFunctions: ExtractedFunction[] = [];
+  for (const file of sourceFiles) {
+    const adapter = adapterFor(file);
+    if (!adapter) continue;
+
+    try {
+      const code = await fs.readFile(path.join(baseDir, file), 'utf-8');
+      const { functions } = adapter.extract(file, code);
+      allFunctions.push(...functions);
+    } catch {
+      // Skip unparseable files safely
+    }
+  }
+
+  return allFunctions;
 };
 
 /**
@@ -306,25 +381,7 @@ export const checkSuppressions = async (
     };
   }
 
-  const ignoreMatcher = createIgnoreMatcher(parsed.filePatterns);
-
-  // Scan and extract all functions across all registered languages
-  const sourceFiles = await walkSourceFiles(baseDir, baseDir, (p) => ignoreMatcher.isIgnored(p));
-  const allFunctions: ExtractedFunction[] = [];
-
-  for (const file of sourceFiles) {
-    const adapter = adapterFor(file);
-    if (!adapter) continue;
-
-    try {
-      const code = await fs.readFile(path.join(baseDir, file), 'utf-8');
-      const { functions } = adapter.extract(file, code);
-      allFunctions.push(...functions);
-    } catch {
-      // Ignore unparseable or inaccessible individual files
-    }
-  }
-
+  const allFunctions = await extractRepoUniverse(baseDir);
   const resolution = resolveSuppressions(parsed.rawSuppressions, allFunctions);
 
   return {
