@@ -236,6 +236,7 @@ e434559c8e9a1b88:41cf18cc268b48dc # Intentional compatibility shim between clien
 
 - Each hash must be at least **12 characters** (prefixes are resolved against active functions).
 - Hashes are commutative (`A:B` is identical to `B:A`).
+- For byte-identical copy-paste duplicates sharing the same hash, use self-pairs (`H:H`).
 - Multi-member clusters (3+ functions) are suppressed when rules connect all members into a single connected component.
 - **Expiration:** A rule automatically expires as soon as either function body changes (preventing stale suppressions).
 

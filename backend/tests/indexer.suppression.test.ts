@@ -235,5 +235,21 @@ describe('Per-Pair Suppression Engine', () => {
       const res = evaluateClusterSuppression([HASH_TRUNCATE_A, HASH_SHORTEN_B], matcher);
       expect(res.suppressed).toBe(false);
     });
+
+    it('suppresses identical-hash pair with h:h rule and collects reason', () => {
+      const matcher = createMockMatcher([
+        [HASH_TRUNCATE_A, HASH_TRUNCATE_A, 'kept in both packages'],
+      ]);
+      const res = evaluateClusterSuppression([HASH_TRUNCATE_A, HASH_TRUNCATE_A], matcher);
+      expect(res.suppressed).toBe(true);
+      expect(res.reasons).toEqual(['kept in both packages']);
+    });
+
+    it('does NOT suppress identical-hash pair without h:h rule', () => {
+      const matcher = createMockMatcher([[HASH_TRUNCATE_A, HASH_SHORTEN_B, 'unrelated rule']]);
+      const res = evaluateClusterSuppression([HASH_TRUNCATE_A, HASH_TRUNCATE_A], matcher);
+      expect(res.suppressed).toBe(false);
+      expect(res.reasons).toEqual([]);
+    });
   });
 });

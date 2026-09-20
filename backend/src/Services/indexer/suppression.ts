@@ -66,7 +66,7 @@ export interface SuppressionDiagnostic {
 }
 /**
  * Parses raw text content of suppressions (from .dittoignore [suppressions]).
- * 
+ *
  * Syntax: <hashA>:<hashB> # optional reason
  * Or  : <hashA> <hasbB> # optional reason
  */
@@ -284,7 +284,22 @@ export const evaluateClusterSuppression = (
     new Set(memberHashes.map((h) => h.toLowerCase().trim()).filter(Boolean))
   );
 
-  if (distinctHashes.length < 2) {
+  if (distinctHashes.length === 0) {
+    return { suppressed: false, reasons: [] };
+  }
+  // Edge case: byte-identical members (e.g. duplicate identical functions across packages)
+  // When there is exactly 1 distinct hash and 2+ members, check for an h:h self-pair rule.
+  if (distinctHashes.length === 1) {
+    if (memberHashes.length >= 2) {
+      const h = distinctHashes[0];
+      const suppression = matcher.getSuppression(h, h);
+      if (suppression) {
+        return {
+          suppressed: true,
+          reasons: suppression.reason ? [suppression.reason] : [],
+        };
+      }
+    }
     return { suppressed: false, reasons: [] };
   }
 
