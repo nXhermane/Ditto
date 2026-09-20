@@ -305,7 +305,7 @@ class PipelineService {
     if (dittoIgnoreContent) {
       const parsedDitto = parseDittoFile(dittoIgnoreContent);
       const resolution = resolveSuppressions(parsedDitto.rawSuppressions, saved);
-      logSuppressionDiagnostics(resolution);
+      logSuppressionDiagnostics(resolution, parsedDitto.malformedSuppressions);
       suppressionMatcher = createSuppressionMatcher(resolution);
     }
 
