@@ -42,8 +42,10 @@ import type {
 import type { HydratedDocument } from 'mongoose';
 import { createIgnoreMatcher, parseDittoFile, parseIgnorePatterns } from './indexer/ignore.js';
 import {
+  computeShortestUnambiguousPrefix,
   createSuppressionMatcher,
   logSuppressionDiagnostics,
+  MIN_HASH_PREFIX_LENGTH,
   resolveSuppressions,
   type SuppressionMatcher,
 } from './indexer/suppression.js';
@@ -560,6 +562,13 @@ class PrService {
       }
     }
 
+    const allKnownHashes = Array.from(
+      new Set(
+        [...existing.map((doc) => doc.bodyHash), ...changedFns.map((fn) => fn.bodyHash)].filter(
+          Boolean
+        )
+      )
+    );
     const findings: PrFinding[] = [];
     for (const fn of changedFns) {
       const fingerprint = fingerprints.get(fn.bodyHash);
@@ -653,6 +662,21 @@ class PrService {
         );
       }
 
+      let suppressionKey: string | undefined;
+      if (fn.bodyHash && existingDoc.bodyHash) {
+        const prefA = computeShortestUnambiguousPrefix(
+          fn.bodyHash,
+          allKnownHashes,
+          MIN_HASH_PREFIX_LENGTH
+        );
+        const prefB = computeShortestUnambiguousPrefix(
+          existingDoc.bodyHash,
+          allKnownHashes,
+          MIN_HASH_PREFIX_LENGTH
+        );
+        suppressionKey = `${prefA}:${prefB}`;
+      }
+
       findings.push({
         newFunction: { name: fn.name, file: fn.file, startLine: fn.startLine, endLine: fn.endLine },
         match: {
@@ -669,6 +693,7 @@ class PrService {
         proof,
         suppressed: Boolean(suppression),
         ...(suppression?.reason ? { suppressionReason: suppression.reason } : {}),
+        suppressionKey,
       });
     }
 
