@@ -240,6 +240,16 @@ e434559c8e9a1b88:41cf18cc268b48dc # Intentional compatibility shim between clien
 - Multi-member clusters (3+ functions) are suppressed when rules connect all members into a single connected component.
 - **Expiration:** A rule automatically expires as soon as either function body changes (preventing stale suppressions).
 
+Use the helper CLI to add or audit suppressions without calculating hashes manually:
+
+```bash
+# Add a suppression rule for two functions (uses shortest unambiguous prefix)
+npm run suppress add src/utils.ts:formatDate src/legacy.ts:formatDate -- --reason "Intentional legacy format mirror"
+
+# Audit active, stale, or ambiguous suppressions against the current codebase
+npm run suppress check
+```
+
 ### 2. Configure the backend
 
 ```bash

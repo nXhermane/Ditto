@@ -97,11 +97,12 @@ const prFindingSchema = new mongoose.Schema<PrFinding>(
     proof: { type: String, enum: ['executed', 'suspected', 'none'], required: true },
     suppressed: { type: Boolean, default: false },
     suppressionReason: { type: String },
+    suppressionKey: { type: String },
   },
   { _id: false }
 );
 
-const prAnalysisSchema = new mongoose.Schema<IPrAnalysis>(
+export const prAnalysisSchema = new mongoose.Schema<IPrAnalysis>(
   {
     owner: { type: String, required: true, trim: true },
     name: { type: String, required: true, trim: true },

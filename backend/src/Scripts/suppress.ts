@@ -117,6 +117,7 @@ export interface CheckSuppressionsOptions {
 export type CheckSuppressionsResult = SuppressionResolutionResult & {
   hasDittoIgnore: boolean;
   totalRules: number;
+  skippedParseErrors: number;
 };
 
 const plural = (count: number, singular: string, pluralForm: string = `${singular}s`): string =>
@@ -221,7 +222,7 @@ export const addSuppression = async (
   const fnA = await resolveFunctionInFile(targetA, baseDir);
   const fnB = await resolveFunctionInFile(targetB, baseDir);
 
-  const universe = await extractRepoUniverse(baseDir);
+  const { functions: universe } = await extractRepoUniverse(baseDir);
   const allDistinctHashes = Array.from(
     new Set([...universe.map((f) => f.bodyHash), fnA.bodyHash, fnB.bodyHash].filter(Boolean))
   );
@@ -252,15 +253,19 @@ export const addSuppression = async (
   }
 
   let updatedContent = '';
-  if (!existingContent.trim()) {
-    updatedContent = `[suppressions]\n${ruleLine}\n`;
-  } else if (existingContent.includes('[suppressions]')) {
+  const lines = existingContent.split(/\r?\n/);
+  const sectionIndex = lines.findIndex((l) => {
+    const withoutComment = l.split('#')[0].trim().toLowerCase();
+    return withoutComment === '[suppressions]';
+  });
+
+  if (sectionIndex !== -1) {
     // Append to existing [suppressions] section
-    const lines = existingContent.split(/\r?\n/);
-    const sectionIndex = lines.findIndex((l) => l.trim() === '[suppressions]');
     lines.splice(sectionIndex + 1, 0, ruleLine);
     updatedContent = lines.join('\n');
     if (!updatedContent.endsWith('\n')) updatedContent += '\n';
+  } else if (!existingContent.trim()) {
+    updatedContent = `[suppressions]\n${ruleLine}\n`;
   } else {
     // [suppressions] section does not exist yet, append it at the bottom
     const separator = existingContent.endsWith('\n') ? '\n' : '\n\n';
@@ -276,7 +281,9 @@ export const addSuppression = async (
  * Scans the target repository respecting .dittoignore path patterns
  * and extracts all functions across all registered languages.
  */
-export const extractRepoUniverse = async (baseDir: string): Promise<ExtractedFunction[]> => {
+export const extractRepoUniverse = async (
+  baseDir: string
+): Promise<{ functions: ExtractedFunction[]; skippedParseErrors: number }> => {
   const dittoIgnorePath = path.join(baseDir, '.dittoignore');
   let filePatterns: string[] = [];
 
@@ -291,6 +298,7 @@ export const extractRepoUniverse = async (baseDir: string): Promise<ExtractedFun
   const sourceFiles = await walkSourceFiles(baseDir, baseDir, (p) => ignoreMatcher.isIgnored(p));
 
   const allFunctions: ExtractedFunction[] = [];
+  let skippedParseErrors = 0;
   for (const file of sourceFiles) {
     const adapter = adapterFor(file);
     if (!adapter) continue;
@@ -300,11 +308,11 @@ export const extractRepoUniverse = async (baseDir: string): Promise<ExtractedFun
       const { functions } = adapter.extract(file, code);
       allFunctions.push(...functions);
     } catch {
-      // Skip unparseable files safely
+      skippedParseErrors++;
     }
   }
 
-  return allFunctions;
+  return { functions: allFunctions, skippedParseErrors };
 };
 
 /**
@@ -362,6 +370,7 @@ export const checkSuppressions = async (
     return {
       hasDittoIgnore: false,
       totalRules: 0,
+      skippedParseErrors: 0,
       activeRules: [],
       staleRules: [],
       invalidRules: [],
@@ -374,6 +383,7 @@ export const checkSuppressions = async (
     return {
       hasDittoIgnore: true,
       totalRules: 0,
+      skippedParseErrors: 0,
       activeRules: [],
       staleRules: [],
       invalidRules: [],
@@ -381,12 +391,13 @@ export const checkSuppressions = async (
     };
   }
 
-  const allFunctions = await extractRepoUniverse(baseDir);
+  const { functions: allFunctions, skippedParseErrors } = await extractRepoUniverse(baseDir);
   const resolution = resolveSuppressions(parsed.rawSuppressions, allFunctions);
 
   return {
     hasDittoIgnore: true,
     totalRules: parsed.rawSuppressions.length,
+    skippedParseErrors,
     ...resolution,
   };
 };
@@ -419,10 +430,20 @@ export const main = async (): Promise<void> => {
 
     if (result.totalRules === 0) {
       console.log('  no suppression rules configured in .dittoignore.');
+      if (result.skippedParseErrors > 0) {
+        console.log(
+          chalk.yellow(`  ${plural(result.skippedParseErrors, 'file')} skipped (parse error)`)
+        );
+      }
       return;
     }
 
     console.log(`\n  audited ${plural(result.totalRules, 'rule')}:\n`);
+    if (result.skippedParseErrors > 0) {
+      console.log(
+        chalk.yellow(`  ${plural(result.skippedParseErrors, 'file')} skipped (parse error)\n`)
+      );
+    }
 
     if (result.activeRules.length > 0) {
       console.log(chalk.green(`  ✔ ${plural(result.activeRules.length, 'active rule')}:`));

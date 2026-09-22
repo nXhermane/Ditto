@@ -86,6 +86,7 @@ changed="$(jq -r '.data.changedFunctions // 0' <<<"$analysis")"
 # Only count unsuppressed findings for failing the workflow or triggering an alert
 dupe_count="$(jq '[.[] | select((.verdict=="duplicate" or .verdict=="near-duplicate") and .suppressed != true)] | length' <<<"$findings")"
 total_dupe_count="$(jq '[.[] | select(.verdict=="duplicate" or .verdict=="near-duplicate")] | length' <<<"$findings")"
+# Deliberate: proven_count includes suppressed findings because suppression mutes duplicate claims, never proven divergences.
 proven_count="$(jq '[.[] | select(.proof=="executed")] | length' <<<"$findings")"
 
 # --- build the report ---
@@ -106,7 +107,11 @@ report="$(mktemp)"
     jq -r '
       .[] | select(.verdict=="duplicate" or .verdict=="near-duplicate") |
       (if .suppressed == true then
-        "- ⚪ suppressed: `" + .newFunction.name + "` (`" + .newFunction.file + ":" + (.newFunction.startLine|tostring) + "`) intentional duplicate of `" + (.match.name // "?") + "` (`" + (.match.file // "?") + ":" + ((.match.startLine // 0)|tostring) + "`)" + (if .suppressionReason then " — *" + .suppressionReason + "*" else "" end)
+        "- " +
+        (if .proof=="executed" then "⚪ suppressed, 🔴 proven divergence: " else "⚪ suppressed: " end) +
+        "`" + .newFunction.name + "` (`" + .newFunction.file + ":" + (.newFunction.startLine|tostring) + "`) " +
+        "intentional duplicate of `" + (.match.name // "?") + "` (`" + (.match.file // "?") + ":" + ((.match.startLine // 0)|tostring) + "`)" +
+        (if .suppressionReason then " — *" + .suppressionReason + "*" else "" end)
       else
         "- " +
         (if .proof=="executed" then "🔴 **PROVEN divergence** — " else "🟡 suspected — " end) +
@@ -142,6 +147,7 @@ if [[ "$COMMENT" == "true" ]]; then
 fi
 
 # --- optional gate ---
+# Deliberate: proven-divergence continues to fail even if the finding is suppressed (divergences are never muted).
 case "$FAIL_ON" in
   proven-divergence) (( proven_count > 0 )) && { echo "::error::${proven_count} proven divergence(s) found."; exit 1; } ;;
   duplicate)         (( dupe_count   > 0 )) && { echo "::error::${dupe_count} reinvented function(s) found."; exit 1; } ;;

@@ -129,6 +129,48 @@ describe('Suppression CLI Helper (add & check)', () => {
       expect(content).toContain(res.ruleLine);
     });
 
+    it('correctly appends under existing commented/cased [suppressions] header instead of prepending to file', async () => {
+      const fileA = path.join(tmpDir, 'fnA.ts');
+      const fileB = path.join(tmpDir, 'fnB.ts');
+      const dittoIgnorePath = path.join(tmpDir, '.dittoignore');
+
+      await fs.writeFile(
+        fileA,
+        `export function computeA(x: number) {
+            const res = x * 2;
+            return res;
+         }`
+      );
+      await fs.writeFile(
+        fileB,
+        `export function computeB(x: number) {
+            const res = x * 2;
+           return res;
+         }`
+      );
+
+      await fs.writeFile(
+        dittoIgnorePath,
+        `[files]
+        vendor/**
+        [Suppressions] # pairs of intentional clones
+        `
+      );
+
+      const res = await addSuppression('fnA.ts:computeA', 'fnB.ts:computeB', {
+        targetDir: tmpDir,
+        reason: 'intentional mirror',
+      });
+
+      const content = await fs.readFile(res.dittoIgnorePath, 'utf-8');
+      const lines = content.split(/\r?\n/).filter(Boolean);
+      expect(lines[0]).toBe('[files]');
+      const headerIdx = lines.findIndex((l) => l.includes('[Suppressions]'));
+      const ruleIdx = lines.findIndex((l) => l.includes(res.ruleLine));
+      expect(headerIdx).toBeGreaterThan(0);
+      expect(ruleIdx).toBe(headerIdx + 1);
+    });
+
     it('uses file:line as disambiguator when function names collide in a file', async () => {
       const fileA = path.join(tmpDir, 'service.ts');
       const fileB = path.join(tmpDir, 'other.ts');

@@ -2,8 +2,10 @@ import { describe, it, expect, vi } from 'vitest';
 
 import PrService from '../src/Services/pr.service.js';
 import ProbeService from '../src/Services/probe.service.js';
+import { prAnalysisSchema } from '../src/Models/prAnalysis.model.js';
 import { EMBED_VERSION } from '../src/Services/embedding.service.js';
 import type { ExtractedFunction, Fingerprint } from '../src/Models/contracts.js';
+import mongoose from 'mongoose';
 
 /**
  * The PR agent's contract (§3.4/§3.5): match a changed function against the
@@ -392,5 +394,15 @@ describe('PrService.analyze with .dittoignore', () => {
 
     expect(result.changedFunctions).toBe(1);
     expect(result.filesTruncated).toBe(true);
+  });
+
+  it('SCHEMA: prAnalysisSchema findings embed suppressionKey so Mongoose does not strip it on save', () => {
+    const findingsPath = prAnalysisSchema.path('findings');
+    expect(findingsPath).toBeInstanceOf(mongoose.Schema.Types.DocumentArray);
+
+    if (findingsPath instanceof mongoose.Schema.Types.DocumentArray) {
+      expect(findingsPath.schema.paths).toHaveProperty('suppressionKey');
+      expect(findingsPath.schema.path('suppressionKey')).toBeDefined();
+    }
   });
 });
