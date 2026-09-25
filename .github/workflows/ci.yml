@@ -21,6 +21,8 @@ jobs:
           cache: npm
           cache-dependency-path: backend/package-lock.json
       - run: npm ci
+      - name: Python Harness Unit Tests
+        run: npm run test:python 
       - name: Typecheck
         run: npm run typecheck
       - name: Test

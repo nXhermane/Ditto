@@ -3,6 +3,7 @@ import { ts } from 'ts-morph';
 
 import logger from '../Config/logger.js';
 import type { DivergenceTable, ExtractedFunction } from '../Models/index.js';
+import { PythonProbeRunner } from './probe/languages/python/python.runner.js';
 
 /**
  * EXECUTION — deterministic, no LLM, zero tokens. The differentiator.
@@ -357,6 +358,7 @@ export const buildRows = (cells: ProbeCell[]): DivergenceTable['rows'] => {
 };
 
 class ProbeService {
+  private readonly pyRunner = new PythonProbeRunner();
   /**
    * Execute a cluster's pure members on the adjudicator's adversarial inputs.
    *
@@ -369,9 +371,10 @@ class ProbeService {
     // THE GATE. Impure functions have database calls, network, and dependencies:
     // executing them is both meaningless and a security hole.
     const pure = members.filter((member) => member.isPure && (member.language ?? 'ts') === 'ts');
-    if (pure.length < 2) {
+    const purePy = members.filter((m) => m.isPure && m.language === 'python');
+    if (pure.length < 2 && purePy.length < 2) {
       logger.info(
-        `probe skipped: ${pure.length} of ${members.length} members are pure, need at least 2`
+        `probe skipped: ${pure.length} pure TS and ${purePy.length} pure Python members, need at least 2 of either`
       );
       return undefined;
     }
@@ -382,7 +385,11 @@ class ProbeService {
 
     let result: WorkerResult;
     try {
-      result = await this.runWorker(pure, probeInputs);
+      if (purePy.length >= 2) {
+        result = await this.pyRunner.run(purePy, probeInputs);
+      } else {
+        result = await this.runWorker(pure, probeInputs);
+      }
     } catch (err) {
       logger.warn('probe sandbox failed — no divergence table:', err instanceof Error ? err.message : err);
       return undefined;

@@ -13,3 +13,4 @@ dist
 
 # Ditto local index cache (regenerable via `npm run index`)
 .cache
+__pycache__
