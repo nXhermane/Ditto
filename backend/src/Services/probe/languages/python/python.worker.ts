@@ -32,33 +32,19 @@ async function run(): Promise<void> {
   const unusable: Array<{ functionId: string; reason: string }> = [];
   const ready: Array<{ id: string; fn: any }> = [];
 
+  const extractCandidate = pyodide.globals.get('extract_and_prepare_candidate');
+
   for (const member of data.members) {
     try {
       const memberScope = pyodide.toPy({});
 
-      if (member.preamble) {
-        try {
-          await pyodide.runPythonAsync(member.preamble, { globals: memberScope });
-        } catch (_) {
-          // Optional preamble failure is non-fatal.
-        }
-      }
+      const targetFn = extractCandidate(
+        member.body,
+        member.preamble ?? null,
+        memberScope,
+      );
 
-      await pyodide.runPythonAsync(member.body, { globals: memberScope });
-
-      const keys = Array.from(memberScope.keys() as string[]).filter((k: string) => !k.startsWith('__'));
-      let targetFn: any = null;
-
-      // Find the first callable in the scope (the candidate function).
-      for (const k of keys) {
-        const val = memberScope.get(k);
-        if (typeof val === 'function' || (val && typeof val.call === 'function')) {
-          targetFn = val;
-          break;
-        }
-      }
-
-      if (!targetFn) {
+      if (!targetFn || (typeof targetFn !== 'function' && typeof targetFn.call !== 'function')) {
         unusable.push({
           functionId: member.id,
           reason: 'No callable function found in member body',
@@ -74,7 +60,6 @@ async function run(): Promise<void> {
     }
   }
 
-
   const invokeHelper = pyodide.globals.get('invoke_candidate');
 
   for (const input of data.inputs) {
@@ -83,20 +68,11 @@ async function run(): Promise<void> {
       let error = '';
       let key = '';
 
-      // Reset interrupt buffer to 0 (no signal) before each call.
-      Atomics.store(data.interruptBuffer, 0, 0);
-
-      // Arm a 1-second timeout: write 2 (SIGINT) to the shared buffer.
-      // Pyodide checks this buffer at bytecode boundaries and raises KeyboardInterrupt.
-      const interruptTimer = setTimeout(() => {
-        Atomics.store(data.interruptBuffer, 0, 2); // 2 = SIGINT
-      }, 1000);
+      // Signal main thread to arm the 1000ms interrupt timer in parallel.
+      parentPort?.postMessage({ type: 'call_start' });
 
       try {
         const rawResult: string = invokeHelper(entry.fn, input);
-        clearTimeout(interruptTimer);
-        // Reset buffer after successful completion.
-        Atomics.store(data.interruptBuffer, 0, 0);
 
         const result = JSON.parse(rawResult);
 
@@ -111,10 +87,6 @@ async function run(): Promise<void> {
           key = `throw:${result.name}`;
         }
       } catch (err: any) {
-        clearTimeout(interruptTimer);
-        // Always reset buffer after error too.
-        Atomics.store(data.interruptBuffer, 0, 0);
-
         // Map KeyboardInterrupt (from interrupt buffer) to throw:Timeout
         // for semantic parity with the JS probe (vm.runInContext timeout).
         const isInterrupt =
@@ -130,6 +102,8 @@ async function run(): Promise<void> {
           error = `${name}: ${msg}`;
           key = `throw:${name}`;
         }
+      } finally {
+        parentPort?.postMessage({ type: 'call_end' });
       }
 
       cells.push({

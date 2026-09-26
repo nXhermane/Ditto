@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import json
 import math
 from typing import Any, Callable, Set
@@ -97,3 +98,58 @@ def invoke_candidate(fn: Callable[..., Any], args_json: str) -> str:
             "name": type(e).__name__,
             "message": str(e),
         })
+
+
+def extract_and_prepare_candidate(
+    body_source: str,
+    preamble_source: str | None,
+    scope: dict[str, Any],
+) -> Callable[..., Any]:
+    """
+    Executes the preamble (if any) and member body within the given scope,
+    then locates and returns the target callable candidate function.
+
+    Uses Python's ast module to inspect the member body statically, ensuring
+    inner helper functions or imports do not shadow the main candidate.
+    """
+    if preamble_source:
+        try:
+            exec(preamble_source, scope)
+        except Exception:
+            # Preamble evaluation failure is non-fatal:
+            # function might not need it or can fail later at invocation.
+            pass
+
+    tree = ast.parse(body_source)
+
+    target_name: str | None = None
+
+    # 1. Standard function definition at the top level of the body
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef):
+            target_name = node.name
+            break
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    target_name = target.id
+                    break
+            if target_name:
+                break
+
+    # 2. Direct anonymous lambda expression: e.g. "lambda x: x + 1"
+    if not target_name and len(tree.body) == 1 and isinstance(tree.body[0], ast.Expr):
+        val = eval(body_source, scope)
+        if callable(val):
+            return val
+
+    if not target_name:
+        raise ValueError("No callable function found in member body")
+
+    exec(body_source, scope)
+
+    candidate = scope.get(target_name)
+    if not callable(candidate):
+        raise ValueError(f"Symbol '{target_name}' is not callable")
+
+    return candidate
